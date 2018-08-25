@@ -1,23 +1,41 @@
 extern crate nix;
 
 use std::io::{self, Write};
-use std::process::Command;
 use std::ffi::CString;
 
-use nix::unistd::{fork, ForkResult};
-use nix::sys::wait::{wait, waitpid, WaitStatus, WaitPidFlag};
+use nix::unistd::{fork, ForkResult, execvp};
+use nix::sys::wait::{wait};
+
+// TODO: add cd to this
+// TODO: find autocompletion
 
 // need to add left side of pipe as optional argument
-fn spawn_proc(pr: Option<&str>, pr_arr: Vec<&str>){
+fn spawn_proc(proc_argv: Option<&str>, pr_arr: Vec<&str>){
     match fork() {
         Ok(ForkResult::Parent { child, .. }) => {
-            match wait() {
-                Ok(v) => println!("working fine {:?}", v),
-                Err(e) => println!("error executing child proc {}", e),
-            }
-            println!("Continuing execution in parent process, new child has pid: {}", child);
+            // check here if it's terminal - if not, waitpid with nohung should be used
+            // or we can even completely ignore subprocess
+            wait().expect("Child returned unexpected result");
+            // println!("Continuing execution in parent process, new child has pid: {}", child);
         }
-        Ok(ForkResult::Child) => println!("I'm a new child process"),
+        Ok(ForkResult::Child) => {
+            // we should think of handling redirections here
+            // and parsing execve
+            // Catch unwrap here to handle empty arrays
+            let str_argv = match proc_argv {
+                Some(v) => v,
+                None => return,
+            };
+            // might crash if bad arguments
+            let cstr_argv: Vec<_> = str_argv.split(" ")
+                                    .map(|arg| CString::new(arg).unwrap())
+                                    .collect();
+            let raw_argv = cstr_argv.into_boxed_slice();
+            match execvp(&raw_argv[0], &*raw_argv) {
+                Ok(_) => {},
+                Err(_) => println!("Cannot execute command"),
+            };
+        },
         Err(_) => println!("Fork failed"),
     }
 }
