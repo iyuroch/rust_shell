@@ -2,30 +2,59 @@ extern crate nix;
 
 use std::io::{self, Write};
 use std::ffi::CString;
+use std::collections::VecDeque;
+use std::os::unix::io::RawFd;
 
-use nix::unistd::{fork, ForkResult, execvp};
-use nix::sys::wait::{wait};
+use nix::unistd::{fork, ForkResult, execvp, pipe, dup2, close};
+use nix::sys::wait::{wait, waitpid, WaitPidFlag};
 
+// TODO: print pwd
+// TODO: globs
 // TODO: add cd to this
 // TODO: find autocompletion
 
 // need to add left side of pipe as optional argument
-fn spawn_proc(proc_argv: Option<&str>, pr_arr: Vec<&str>){
+fn spawn_proc(proc_argv: Option<&str>, mut pr_arr: &mut VecDeque<&str>, 
+                stdin: Option<RawFd>, is_shell: bool){
+    println!("Hi!");
+    // println!("{:?}", pr_arr);
     match fork() {
         Ok(ForkResult::Parent { child, .. }) => {
             // check here if it's terminal - if not, waitpid with nohung should be used
             // or we can even completely ignore subprocess
-            wait().expect("Child returned unexpected result");
+            // we need to check if this is shell process or not
+            if is_shell {
+                wait().expect("Child returned unexpected result");
+            } else {
+                // we connect part of pipe to stdin of process
+                match stdin {
+                    Some(v) => {
+                        dup2(v, 0).unwrap();
+                    },
+                    None => {},
+                }
+                // we wait for all children to run, return error code with nohang
+                // waitpid(child, Some(WaitPidFlag::WNOHANG)).expect("Child died of some reason");
+            }
             // println!("Continuing execution in parent process, new child has pid: {}", child);
         }
         Ok(ForkResult::Child) => {
             // we should think of handling redirections here
             // and parsing execve
-            // Catch unwrap here to handle empty arrays
             let str_argv = match proc_argv {
                 Some(v) => v,
                 None => return,
             };
+
+            if pr_arr.len() > 0 {
+                // connect pipe
+                // will bite if something wrong
+                let (read_end, write_end) = pipe().unwrap();
+                spawn_proc(pr_arr.pop_front(), &mut pr_arr, Some(read_end), false);
+                close(read_end).unwrap();
+                dup2(write_end, 1).unwrap();
+            }
+            
             // might crash if bad arguments
             let cstr_argv: Vec<_> = str_argv.split(" ")
                                     .map(|arg| CString::new(arg).unwrap())
@@ -49,9 +78,13 @@ fn main() {
         io::stdin().read_line(&mut stdin_buff).expect("Cannot read input");
         {
             // expand_glob();
-            // Doesn't work with edge cases: "|", " | ", etc.
-            let mut pr_arr = stdin_buff.split(" | ").map(|x| x.trim()).collect::<Vec<_>>();
-            spawn_proc(pr_arr.pop(), pr_arr);
+            // Doesn't work with edge cases: "|", " | ", if empty command
+            // we form vector of strings command that needs to be executed
+            let mut pr_arr = stdin_buff.split(" | ")
+                                .map(|x| x.trim())
+                                .filter(|x| *x != "")
+                                .collect::<VecDeque<_>>();
+            spawn_proc(pr_arr.pop_front(), &mut pr_arr, None, true);
             // println!("{:?}", pr_arr)
         }
         // spawn();
@@ -60,6 +93,4 @@ fn main() {
         io::stdout().flush().expect("Cannot flush output");
         stdin_buff.clear();
     }
-    // expand globs
-    // fork, execve with arguments
 }
