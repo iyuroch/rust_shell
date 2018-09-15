@@ -12,27 +12,66 @@ use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 // TODO: globs
 // TODO: add cd to this
 // TODO: find autocompletion
+// TODO: iterator isntead of for loop
+
+// as we pass fd to the children - they still remain opened in the parent process,
+// those cannot be used in children. if we close them in parent - we cannot pass them to the children
+// as they remain closed. we can reopen them in child process, or close at the very end
 
 fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
     let (parent_write_end, read_end, write_end, child_read_end) 
-                = (fd_arr[0], fd_arr[1], fd_arr[2], fd_arr[3]);
+    = (fd_arr[0], fd_arr[1], fd_arr[2], fd_arr[3]);
     match fork() {
         Ok(ForkResult::Parent { child, .. }) => {
+
+            match parent_write_end {
+                Some(v) => {
+                    match close(v) {
+                        Ok(_) => {},
+                        Err(e) => {},
+                    }
+                }
+                None => {},
+            }
+
+            match read_end {
+                Some(v) => {
+                    match close(v) {
+                        Ok(_) => {},
+                        Err(e) => {},
+                    }
+                }
+                None => {},
+            }
+
             // we need to check if this is shell process or not
-            match write_end {
-                Some(_) => {
-                    match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
-                        // need to match exit code of child here
-                        Ok(_) => {},
-                        Err(e) => println!("Error in child: {}", e),
+            // match write_end {
+            //     Some(_) => {
+            //         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
+            //             // need to match exit code of child here
+            //             Ok(_) => {},
+            //             Err(e) => println!("Error in child: {}", e),
+            //         }
+            //     },
+            //     None => {
+            //         match waitpid(child, Some(WaitPidFlag::WEXITED)) {
+            //             Ok(_) => {},
+            //             Err(_e) => {},
+            //             // Err(e) => println!("Error in waiting children {}", e)
+            //         }
+            //     },
+            // }
+
+            match child_read_end {
+                Some(_) => {},
+                None => match waitpid(child, Some(WaitPidFlag::WEXITED)) {
+                    Ok(_) => {},
+                    // Err(WaitStatus { kind: IoErrorKind::EndOfFile, .. }) => break,
+                    Err(e) => {
+                        // if e.kind == WaitStatus::E
+                        println!("Child_read_end Error waiting for children {}", e)
                     }
-                },
-                None => {
-                    match wait() {
-                        Ok(_) => {},
-                        Err(e) => println!("{}", )
-                    }
-                },
+                }
             }
             
             return;
@@ -41,15 +80,31 @@ fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
             // we should think of handling redirections here
             // and parsing execve
 
-            // match read_end {
-            //         Some(v) => {
-            //             // might crash here
-            //             close(write_end.unwrap()).unwrap();
-            //             dup2(v, 0).unwrap();
-            //         },
-            //         None => {},
-            // }
-            
+
+            match parent_write_end {
+                Some(v) => close(v).unwrap(),
+                None => {},
+            }
+
+            match child_read_end {
+                Some(v) => close(v).unwrap(),
+                None => {},
+            }
+
+            match read_end {
+                    Some(v) => {
+                        dup2(v, 0).unwrap();
+                    },
+                    None => {},
+            }
+
+            match write_end {
+                    Some(v) => {
+                        dup2(v, 1).unwrap();
+                    },
+                    None => {},
+            }
+
             // might crash if bad arguments
             let cstr_argv: Vec<_> = str_argv.split(" ")
                                     .map(|arg| CString::new(arg).unwrap())
@@ -85,23 +140,17 @@ fn main() {
             // {none(write_end), none(read_end), write-end, read-end, write-end, read-end, none}
             // (p1)<=>(p2)<=>(p3)
             // to close unused fd in child process we need to pass 2 pairs of pipes
-            // can panic here!
-            // let (write_end, read_end) = pipe().unwrap();
-            // let mut fd_arr: VecDeque<_> = vec![None, None, Some(write_end.clone()), Some(read_end.clone())]
-            //                     .into_iter().collect();
 
             let mut fd_arr: VecDeque<_> = vec![None, None].into_iter().collect();
 
-            // println!("{:?}", fd_arr);
-
             while let Some(pr_args) = pr_arr.pop_front() {
-                println!("{:?}", fd_arr);
                 if pr_arr.len() == 0 {
                     fd_arr.extend(&[None, None]);
                 } else {
-                    let (write_end, read_end) = pipe().unwrap();
+                    let (read_end, write_end) = pipe().unwrap();
                     fd_arr.extend(&[Some(write_end.clone()), Some(read_end.clone())]);
                 }
+                // println!("{:?}", fd_arr);
                 spawn_proc(pr_args, fd_arr.clone());
                 fd_arr = fd_arr.split_off(2);
             }
