@@ -4,13 +4,14 @@ use std::io::{self, Write};
 use std::ffi::CString;
 use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
+use std::process;
 
 use nix::unistd::{fork, ForkResult, execvp, pipe, dup2, close};
 use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 
 // TODO: print pwd
 // TODO: globs
-// TODO: add cd to this
+// TODO: add cd to this!!
 // TODO: find autocompletion
 // TODO: iterator isntead of for loop
 
@@ -18,7 +19,7 @@ use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 // those cannot be used in children. if we close them in parent - we cannot pass them to the children
 // as they remain closed. we can reopen them in child process, or close at the very end
 
-fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
+fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>, last: Option<()>) {
     let (parent_write_end, read_end, write_end, child_read_end) 
     = (fd_arr[0], fd_arr[1], fd_arr[2], fd_arr[3]);
     match fork() {
@@ -28,7 +29,7 @@ fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
                 Some(v) => {
                     match close(v) {
                         Ok(_) => {},
-                        Err(e) => {},
+                        Err(_e) => {},
                     }
                 }
                 None => {},
@@ -38,40 +39,20 @@ fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
                 Some(v) => {
                     match close(v) {
                         Ok(_) => {},
-                        Err(e) => {},
+                        Err(_e) => {},
                     }
                 }
                 None => {},
             }
 
-            // we need to check if this is shell process or not
-            // match write_end {
-            //     Some(_) => {
-            //         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
-            //             // need to match exit code of child here
-            //             Ok(_) => {},
-            //             Err(e) => println!("Error in child: {}", e),
-            //         }
-            //     },
-            //     None => {
-            //         match waitpid(child, Some(WaitPidFlag::WEXITED)) {
-            //             Ok(_) => {},
-            //             Err(_e) => {},
-            //             // Err(e) => println!("Error in waiting children {}", e)
-            //         }
-            //     },
-            // }
-
-            match child_read_end {
-                Some(_) => {},
-                None => match waitpid(child, Some(WaitPidFlag::WEXITED)) {
-                    Ok(_) => {},
-                    // Err(WaitStatus { kind: IoErrorKind::EndOfFile, .. }) => break,
-                    Err(e) => {
-                        // if e.kind == WaitStatus::E
-                        println!("Child_read_end Error waiting for children {}", e)
-                    }
-                }
+            match last {
+                Some(_) => match waitpid(child, Option::None) {
+                    Ok(_) => {
+                        return;
+                    },
+                    Err(e) => println!("Error: {}", e)
+                },
+                None => {},
             }
             
             return;
@@ -114,7 +95,10 @@ fn spawn_proc(str_argv: &str, fd_arr: VecDeque<Option<RawFd>>){
 
             match execvp(&raw_argv[0], &*raw_argv) {
                 Ok(_) => {},
-                Err(_) => println!("Cannot execute command"),
+                Err(_) => {
+                    println!("Cannot execute command");
+                    process::exit(0x0100);
+                }
             };
         },
         Err(_) => println!("Fork failed"),
@@ -142,16 +126,18 @@ fn main() {
             // to close unused fd in child process we need to pass 2 pairs of pipes
 
             let mut fd_arr: VecDeque<_> = vec![None, None].into_iter().collect();
+            let mut last: Option<()> = None;
 
             while let Some(pr_args) = pr_arr.pop_front() {
                 if pr_arr.len() == 0 {
+                    last = Some(());
                     fd_arr.extend(&[None, None]);
                 } else {
                     let (read_end, write_end) = pipe().unwrap();
                     fd_arr.extend(&[Some(write_end.clone()), Some(read_end.clone())]);
                 }
                 // println!("{:?}", fd_arr);
-                spawn_proc(pr_args, fd_arr.clone());
+                spawn_proc(pr_args, fd_arr.clone(), last);
                 fd_arr = fd_arr.split_off(2);
             }
             // spawn_proc(pr_arr.pop_front(), &mut pr_arr, None, None, true);
