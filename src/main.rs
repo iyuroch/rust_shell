@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
 use std::process;
 
-use nix::unistd::{fork, ForkResult, execvp, pipe, dup2, close};
+use nix::unistd::{fork, ForkResult, execvp, pipe, dup2, close, Pid};
 use nix::sys::wait::{wait, waitpid, WaitPidFlag, WaitStatus};
 
 // TODO: print pwd
@@ -127,6 +127,7 @@ fn main() {
 
             let mut fd_arr: VecDeque<_> = vec![None, None].into_iter().collect();
             let mut last: Option<()> = None;
+            let mut first_child: Option<Pid> = None;
 
             while let Some(pr_args) = pr_arr.pop_front() {
                 if pr_arr.len() == 0 {
